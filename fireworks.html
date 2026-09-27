@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fireworks</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #05060f; font-family: system-ui, -apple-system, sans-serif; }
+  canvas { display: block; cursor: crosshair; }
+  .panel {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: center;
+    padding: 10px 14px; border-radius: 14px;
+    background: rgba(255,255,255,0.08); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.12); color: #eee; font-size: 14px;
+    max-width: calc(100% - 32px);
+  }
+  button, select {
+    font: inherit; color: #fff; background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover, select:hover { background: rgba(255,255,255,0.22); }
+  button.on { background: #e0457b; border-color: #e0457b; }
+  select option { color: #000; }
+  .hint {
+    position: fixed; top: 20px; width: 100%; text-align: center;
+    color: rgba(255,255,255,0.6); font-size: 15px; pointer-events: none; transition: opacity 1s;
+  }
+</style>
+</head>
+<body>
+<div class="hint" id="hint">Click or tap anywhere to launch a firework · Press Space for a random one</div>
+<canvas id="c"></canvas>
+<div class="panel">
+  <label>Shape
+    <select id="shape">
+      <option value="random">Random</option>
+      <option value="sphere">Sphere</option>
+      <option value="ring">Ring</option>
+      <option value="heart">Heart</option>
+      <option value="star">Star</option>
+      <option value="willow">Willow</option>
+    </select>
+  </label>
+  <button id="launch">🚀 Launch</button>
+  <button id="show">🎆 Show</button>
+  <button id="auto">Auto: Off</button>
+  <button id="clear">Clear</button>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, dpr;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const GRAVITY = 0.05;
+const rockets = [];
+const particles = [];
+const SHAPES = ['sphere', 'ring', 'heart', 'star', 'willow'];
+
+class Rocket {
+  constructor(tx, ty, shape) {
+    this.x = rand(W * 0.3, W * 0.7);
+    this.y = H;
+    this.tx = tx; this.ty = ty;
+    this.shape = shape;
+    this.hue = rand(0, 360);
+    const dist = Math.hypot(tx - this.x, ty - this.y);
+    const frames = Math.max(35, dist / 9);
+    this.vx = (tx - this.x) / frames;
+    this.vy = (ty - this.y) / frames;
+    this.life = frames;
+    this.trail = [];
+  }
+  update() {
+    this.trail.push([this.x, this.y]);
+    if (this.trail.length > 8) this.trail.shift();
+    this.x += this.vx; this.y += this.vy;
+    // sparks from the rocket tail
+    if (Math.random() < 0.6) {
+      particles.push(new Particle(this.x, this.y, rand(-0.5, 0.5), rand(0.5, 1.5), 40, 0.4, 30, 0.9, 1.2));
+    }
+    return --this.life > 0;
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.moveTo(this.trail[0]?.[0] ?? this.x, this.trail[0]?.[1] ?? this.y);
+    for (const [x, y] of this.trail) ctx.lineTo(x, y);
+    ctx.lineTo(this.x, this.y);
+    ctx.strokeStyle = `hsl(${this.hue}, 100%, 80%)`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+class Particle {
+  constructor(x, y, vx, vy, hue, gravity = 1, life = 80, friction = 0.97, size = 2, sat = 100) {
+    this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+    this.hue = hue; this.g = gravity; this.life = this.maxLife = life;
+    this.friction = friction; this.size = size; this.sat = sat;
+    this.flicker = Math.random() < 0.3;
+  }
+  update() {
+    this.vx *= this.friction; this.vy *= this.friction;
+    this.vy += GRAVITY * this.g;
+    this.x += this.vx; this.y += this.vy;
+    return --this.life > 0;
+  }
+  draw() {
+    const t = this.life / this.maxLife;
+    let alpha = Math.min(1, t * 1.5);
+    if (this.flicker && Math.random() < 0.3) alpha *= 0.3;
+    ctx.fillStyle = `hsla(${this.hue}, ${this.sat}%, ${50 + 30 * t}%, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size * (0.5 + t * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function explode(x, y, shape, hue) {
+  if (shape === 'random') shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+  const hue2 = (hue + rand(60, 180)) % 360;
+  const push = (vx, vy, h = hue, opts = {}) =>
+    particles.push(new Particle(x, y, vx, vy, h + rand(-15, 15),
+      opts.g ?? 1, opts.life ?? rand(60, 100), opts.f ?? 0.97, opts.size ?? 2));
+
+  switch (shape) {
+    case 'sphere': {
+      const n = 140;
+      for (let i = 0; i < n; i++) {
+        const a = rand(0, Math.PI * 2), s = Math.sqrt(Math.random()) * 6;
+        push(Math.cos(a) * s, Math.sin(a) * s, i % 2 ? hue : hue2);
+      }
+      break;
+    }
+    case 'ring': {
+      const n = 90, s = 5;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        push(Math.cos(a) * s, Math.sin(a) * s * 0.6, hue, { g: 0.6 });
+      }
+      for (let i = 0; i < 30; i++) {
+        const a = rand(0, Math.PI * 2), r = rand(0, 1.5);
+        push(Math.cos(a) * r, Math.sin(a) * r, hue2, { g: 0.6 });
+      }
+      break;
+    }
+    case 'heart': {
+      const n = 120, scale = 0.33;
+      for (let i = 0; i < n; i++) {
+        const t = (i / n) * Math.PI * 2;
+        const hx = 16 * Math.pow(Math.sin(t), 3);
+        const hy = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+        push(hx * scale, hy * scale, 340, { g: 0.4, f: 0.96 });
+      }
+      break;
+    }
+    case 'star': {
+      const points = 5, n = 150;
+      for (let i = 0; i < n; i++) {
+        const t = i / n;
+        const seg = Math.floor(t * points * 2);
+        const local = t * points * 2 - seg;
+        const a1 = (seg / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+        const a2 = ((seg + 1) / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+        const r1 = seg % 2 === 0 ? 6 : 2.6, r2 = seg % 2 === 0 ? 2.6 : 6;
+        const px = Math.cos(a1) * r1 * (1 - local) + Math.cos(a2) * r2 * local;
+        const py = Math.sin(a1) * r1 * (1 - local) + Math.sin(a2) * r2 * local;
+        push(px, py, 50, { g: 0.4, f: 0.96 });
+      }
+      break;
+    }
+    case 'willow': {
+      const n = 110;
+      for (let i = 0; i < n; i++) {
+        const a = rand(0, Math.PI * 2), s = rand(1, 4.5);
+        push(Math.cos(a) * s, Math.sin(a) * s, 42, { g: 1.1, life: rand(130, 180), f: 0.985, size: 1.6 });
+      }
+      break;
+    }
+  }
+  // bright flash
+  particles.push(new Particle(x, y, 0, 0, hue, 0, 8, 1, 30, 30));
+}
+
+function launch(x, y) {
+  const shape = document.getElementById('shape').value;
+  rockets.push(new Rocket(x, y, shape));
+  hideHint();
+}
+
+function randomLaunch() {
+  launch(rand(W * 0.15, W * 0.85), rand(H * 0.12, H * 0.5));
+}
+
+let hintHidden = false;
+function hideHint() {
+  if (!hintHidden) { hintHidden = true; document.getElementById('hint').style.opacity = 0; }
+}
+
+function loop() {
+  // fade previous frame for trails
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = 'rgba(5, 6, 15, 0.2)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (let i = rockets.length - 1; i >= 0; i--) {
+    const r = rockets[i];
+    if (!r.update()) {
+      explode(r.x, r.y, r.shape, r.hue);
+      rockets.splice(i, 1);
+    } else r.draw();
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    if (!p.update()) particles.splice(i, 1);
+    else p.draw();
+  }
+  requestAnimationFrame(loop);
+}
+loop();
+
+// Controls
+canvas.addEventListener('pointerdown', e => launch(e.clientX, e.clientY));
+document.getElementById('launch').onclick = randomLaunch;
+document.getElementById('show').onclick = () => {
+  for (let i = 0; i < 12; i++) setTimeout(randomLaunch, i * 180);
+};
+let autoTimer = null;
+const autoBtn = document.getElementById('auto');
+autoBtn.onclick = () => {
+  if (autoTimer) {
+    clearInterval(autoTimer); autoTimer = null;
+    autoBtn.textContent = 'Auto: Off'; autoBtn.classList.remove('on');
+  } else {
+    autoTimer = setInterval(randomLaunch, 700);
+    autoBtn.textContent = 'Auto: On'; autoBtn.classList.add('on');
+  }
+};
+document.getElementById('clear').onclick = () => {
+  rockets.length = 0; particles.length = 0;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#05060f'; ctx.fillRect(0, 0, W, H);
+};
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); randomLaunch(); }
+});
+</script>
+</body>
+</html>
